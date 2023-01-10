@@ -1,11 +1,16 @@
 from django.contrib.auth import authenticate, login, logout
+from django.core.serializers import serialize
+from django.core.paginator import Paginator
 from django.db import IntegrityError
-from django.http import HttpResponse, HttpResponseRedirect
+from django.http import HttpResponse, HttpResponseRedirect, JsonResponse
 from django.shortcuts import render
 from django.urls import reverse
+from .models import User, Post, Relationship
+from .serializers import PostSerializer
 
-from .models import User
+from rest_framework.renderers import JSONRenderer
 
+import json
 
 def index(request):
     return render(request, "network/index.html")
@@ -61,3 +66,135 @@ def register(request):
         return HttpResponseRedirect(reverse("index"))
     else:
         return render(request, "network/register.html")
+
+def modify_post(request, id):
+    post = Post.objects.get(id=id)
+    
+    # Ensure only author can edit post
+    if request.user != post.author:
+        return HttpResponse('You do not have permission to edit this post', status=403)
+
+    # Load JOSN data for edit
+    data = json.loads(request.body)
+    post.message = data['message']
+    post.save()
+    
+    return JsonResponse({'message' : data['message']}, status=200)    
+
+def follow(request, username):
+    user = User.objects.get(username=username)
+
+    if request.user == user:
+        return HttpResponse('You cannot follow yourself', status=403)
+
+    # Check if user is following in the datavase
+    follow_object = user.relationships_to.filter(from_user=request.user, status=1)
+
+    # Either follow or delete follow object depending on query
+    if follow_object:
+        follow_object.delete()
+        is_followed = False
+    else:
+        follow_object = Relationship(from_user=request.user, to_user=user, status=1)
+        follow_object.save()
+        is_followed = True
+
+    response = {
+        'username' : user.username,
+        'post_count' : user.posts.count(),
+        'following' : user.relationships_from.count(),
+        'followed_by' : user.relationships_to.count(),
+        'is_followed' : is_followed,
+        'join_date' : f'{user.date_joined.strftime("%B")} {user.date_joined.strftime("%Y")}',
+        'requested_by' : request.user.username if request.user.is_authenticated else None,
+    }
+    return JsonResponse(response, status=200)    
+
+def get_user_profile(request, username):
+    user = User.objects.get(username=username)
+    
+    if not request.user.is_authenticated:
+        is_followed = False
+    elif user.relationships_to.filter(from_user=request.user, status=1):
+        is_followed = True
+    else:
+        is_followed = False
+
+    response = {
+        'username' : user.username,
+        'post_count' : user.posts.count(),
+        'following' : user.relationships_from.count(),
+        'followed_by' : user.relationships_to.count(),
+        'is_followed' : is_followed or None,
+        'join_date' : f'{user.date_joined.strftime("%B")} {user.date_joined.strftime("%Y")}',
+        'requested_by' : request.user.username if request.user.is_authenticated else None,
+    }
+    return JsonResponse(response, status=200)
+
+def get_posts(request):
+    pageNumber = int(request.GET.get("page"))
+    postsPerPage = int(request.GET.get("perPage"))
+    user = request.GET.get("user") or None
+    feed = request.GET.get("feed") or None
+
+    # If filtering by follow
+    if feed:
+        follow_relationships = request.user.relationships_from.filter(status=1) # Relationships 
+        following = User.objects.filter(id__in=follow_relationships.values('to_user')) # Users
+        posts = Post.objects.filter(author__in=following) # Posts       
+
+    # If filtering by user
+    elif user:
+        user_obj = User.objects.get(username=user)
+        posts = Post.objects.filter(author=user_obj)  
+
+    # Otherwise, get all posts
+    else:
+        posts = Post.objects.all()
+    
+
+    # Pagination
+    paginator = Paginator(posts, postsPerPage)
+    page = paginator.get_page(pageNumber)
+    serializer = PostSerializer(page, many=True)
+
+    response = {
+        "requested_by" : request.user.username,
+        "page" : pageNumber,
+        "page_count" : paginator.num_pages,
+        "has_next_page" : page.has_next(),
+        "has_previous_page" : page.has_previous(),
+        "posts" : serializer.data,
+    }
+    return JsonResponse(response, status=200)
+
+def like_post(request, id):
+    post = Post.objects.get(id=id)
+    state = json.loads(request.body)['state']
+
+    # Lide/Dislike functionality
+    if state == 'like':
+        post.liked_by.add(request.user)
+    elif state == 'unlike':
+        post.liked_by.remove(request.user)
+    post.save()
+    
+    # Return JSON response containing likes
+    response = {
+        'state': "unlike" if state == "like" else "like",
+        'likes' : post.liked_by.count(),
+    }
+    return JsonResponse(response, status=200)
+
+def submit_post(request):
+    if request.method != "POST":
+        return render(request, "index.html")  
+
+    # Add post to the data-base
+    data = json.loads(request.body)
+    post = Post(author=request.user, message=data['message'])
+    post.save()
+    serializer = PostSerializer(post)
+
+    # Respond with the new post in JSON
+    return JsonResponse(serializer.data, status=200)
