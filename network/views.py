@@ -5,6 +5,7 @@ from django.db import IntegrityError
 from django.http import HttpResponse, HttpResponseRedirect, JsonResponse
 from django.shortcuts import render
 from django.urls import reverse
+from django.db.utils import OperationalError
 from .models import User, Post, Relationship
 from .serializers import PostSerializer
 
@@ -12,9 +13,10 @@ from rest_framework.renderers import JSONRenderer
 
 import json
 
+
+ 
 def index(request):
     return render(request, "network/index.html")
-
 
 def login_view(request):
     if request.method == "POST":
@@ -198,3 +200,5 @@ def submit_post(request):
 
     # Respond with the new post in JSON
     return JsonResponse(serializer.data, status=200)
+
+
