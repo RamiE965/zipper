@@ -1,7 +1,6 @@
 # Zipper
 A twitter-like social media web application that allows users to post 'tweets,' like, follow, block and view profile pages built using Django. 
 
-Currently being revamped. 
 ---
 
 # Setup: 
